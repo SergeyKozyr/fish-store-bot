@@ -32,7 +32,7 @@ def start(update: Update, context: CallbackContext):
 
     keyboard = []
 
-    for product in get_products():
+    for product in get_products(**context.bot_data["cms_config"]):
         keyboard.append(
             [InlineKeyboardButton(text=product["title"], callback_data=product["documentId"])]
         )
@@ -58,11 +58,11 @@ def handle_menu(update: Update, context: CallbackContext):
     if query.data == "SHOW_CART":
         return show_cart(update, context)
 
-    product = get_product(update.callback_query.data)
+    product = get_product(product_id=update.callback_query.data, **context.bot_data["cms_config"])
 
     if picture := product.get("picture"):
         picture_url = picture["formats"]["thumbnail"]["url"]
-        picture = get_product_picture(picture_url)
+        picture = get_product_picture(picture_url=picture_url, **context.bot_data["cms_config"])
     else:
         picture = None
 
@@ -95,9 +95,13 @@ def handle_description(update: Update, context: CallbackContext):
     if query.data == "SHOW_CART":
         return show_cart(update, context)
 
-    cart_id = get_or_create_cart_id(telegram_id=query.message.chat_id)
-    cart_item_id = create_cart_item(cart_id=cart_id, product_id=query.data)
-    add_items_to_cart(cart_id=cart_id, cart_items=[cart_item_id])
+    cart_id = get_or_create_cart_id(
+        telegram_id=query.message.chat_id, **context.bot_data["cms_config"]
+    )
+    cart_item_id = create_cart_item(
+        cart_id=cart_id, product_id=query.data, **context.bot_data["cms_config"]
+    )
+    add_items_to_cart(cart_id=cart_id, cart_items=[cart_item_id], **context.bot_data["cms_config"])
     query.answer("Товар добавлен в корзину", show_alert=True)
     query.delete_message()
     return start(update, context)
@@ -112,8 +116,12 @@ def show_cart(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
 
-    cart_id = get_or_create_cart_id(query.message.chat_id)
-    cart_items = get_cart_by_id(cart_id).get("cart_items", [])
+    cart_id = get_or_create_cart_id(
+        telegram_id=query.message.chat_id, **context.bot_data["cms_config"]
+    )
+    cart_items = get_cart_by_id(cart_id=cart_id, **context.bot_data["cms_config"]).get(
+        "cart_items", []
+    )
 
     text = []
     keyboard = []
@@ -152,7 +160,7 @@ def handle_cart(update: Update, context: CallbackContext):
     elif query.data == "REQUEST_EMAIL":
         return request_email(update, context)
 
-    remove_cart_item(query.data)
+    remove_cart_item(cart_item_id=query.data, **context.bot_data["cms_config"])
     query.answer("Товар удалён из корзины", show_alert=True)
     return show_cart(update, context)
 
@@ -174,7 +182,11 @@ def handle_waiting_email(update: Update, context: CallbackContext):
     Переводит в состояние START
     """
 
-    create_client(telegram_id=update.message.chat_id, email=update.message.text)
+    create_client(
+        telegram_id=update.message.chat_id,
+        email=update.message.text,
+        **context.bot_data["cms_config"],
+    )
     keyboard = [[InlineKeyboardButton(text="В меню", callback_data="RETURN_TO_MENU")]]
 
     update.message.reply_text("Заказ оформлен!", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -231,14 +243,14 @@ def get_database_connection():
     return _database
 
 
-def get_or_create_cart_id(telegram_id: int) -> str:
+def get_or_create_cart_id(telegram_id: int, cms_host: str, cms_api_token: str) -> str:
     db = get_database_connection()
     key = f"cart:{telegram_id}"
 
     if cart_id := db.get(key):
         return cart_id.decode("utf-8")
 
-    cart_id = create_cart(telegram_id)
+    cart_id = create_cart(telegram_id=telegram_id, cms_host=cms_host, cms_api_token=cms_api_token)
     db.set(key, cart_id)
 
     return cart_id
@@ -246,10 +258,12 @@ def get_or_create_cart_id(telegram_id: int) -> str:
 
 if __name__ == "__main__":
     env.read_env()
-    tg_bot_token = env("TG_BOT_TOKEN")
-
-    updater = Updater(tg_bot_token)
+    updater = Updater(env("TG_BOT_TOKEN"))
     dispatcher = updater.dispatcher
+
+    cms_config = {"cms_api_token": env("CMS_API_TOKEN"), "cms_host": env("CMS_HOST")}
+    dispatcher.bot_data["cms_config"] = cms_config
+
     dispatcher.add_handler(CallbackQueryHandler(handle_users_reply))
     dispatcher.add_handler(MessageHandler(Filters.text, handle_users_reply))
     dispatcher.add_handler(CommandHandler("start", handle_users_reply))
